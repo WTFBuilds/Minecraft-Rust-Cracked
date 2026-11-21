@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+@theme {
+  /* Typography */
+  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "SF Mono", monospace;
+
+  /* MELON night-arena palette */
+  --color-night-950: #060a06;
+  --color-night-900: #0a120a;
+  --color-night-800: #0f1a0f;
+  --color-night-700: #162316;
+  --color-night-600: #1d2d1b;
+  --color-line: #1e2f1c;
+  --color-line-bright: #2e4829;
+  --color-melon-300: #c6ff92;
+  --color-melon-400: #9dff57;
+  --color-melon-500: #7fee3c;
+  --color-melon-600: #56b826;
+  --color-melon-700: #3a8c1c;
+  --color-flesh-400: #ff7a92;
+  --color-flesh-500: #ff4f70;
+  --color-fog: #8ea68a;
+  --color-mist: #d6e5cf;
+
+  /* Motion */
+  --animate-marquee: marquee 30s linear infinite;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-blink: blink 1.1s steps(2, start) infinite;
+  --animate-glow: glow 4.5s ease-in-out infinite;
+
+  @keyframes marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+  }
+  @keyframes blink {
+    50% { opacity: 0.2; }
+  }
+  @keyframes glow {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 1; }
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+}
+
+body {
+  background: var(--color-night-950);
+  color: var(--color-mist);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-melon-500);
+  color: #06210b;
+}
+
+@layer components {
+  .container-x {
+    @apply mx-auto w-full max-w-6xl px-5 sm:px-8;
+  }
+
+  /* Minecraft-inspired chunky card */
+  .pixel-card {
+    @apply relative border-2 border-line bg-night-900;
+  }
+
+  .hard-shadow {
+    box-shadow: 4px 4px 0 0 rgb(0 0 0 / 0.5);
+  }
+
+  .eyebrow {
+    @apply font-mono text-xs font-medium uppercase tracking-[0.22em];
+  }
+}
+
+/* Scroll-reveal */
+.reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.reveal.revealed {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .reveal { opacity: 1; transform: none; transition: none; }
+  .animate-marquee, .animate-float, .animate-blink, .animate-glow {
+    animation: none !important;
+  }
+}
