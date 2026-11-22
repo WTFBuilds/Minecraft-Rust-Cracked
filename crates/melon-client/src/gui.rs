@@ -65,6 +65,10 @@ pub fn run(host: &str, port: u16, name: &str) -> Result<(), Box<dyn std::error::
         mouse_captured: false,
         skip_warp_event: false,
         egui_state: None,
+        selected_slot: 0,
+        swing_phase: 0.0,
+        swing_amp: 0.0,
+        prev_feet: None,
         chat_input: String::new(),
         chat_focused: false,
         chat_focus_requested: false,
@@ -95,6 +99,23 @@ pub struct MoveInput {
     pub vertical: f32,
 }
 
+/// UI swatch color per block id (matches the atlas tiles).
+fn block_color(block: u16) -> egui::Color32 {
+    use melon_world::block;
+    match block {
+        block::GRASS => egui::Color32::from_rgb(106, 170, 64),
+        block::DIRT => egui::Color32::from_rgb(134, 96, 67),
+        block::STONE => egui::Color32::from_rgb(127, 127, 127),
+        block::WOOL_RED => egui::Color32::from_rgb(176, 46, 38),
+        block::WOOL_BLUE => egui::Color32::from_rgb(53, 57, 157),
+        block::WOOL_YELLOW => egui::Color32::from_rgb(248, 197, 39),
+        block::WOOL_GREEN => egui::Color32::from_rgb(93, 124, 22),
+        block::IRON_BLOCK => egui::Color32::from_rgb(216, 216, 216),
+        block::GOLD_BLOCK => egui::Color32::from_rgb(250, 214, 53),
+        _ => egui::Color32::GRAY,
+    }
+}
+
 struct App {
     state: Arc<Mutex<ClientState>>,
     /// Local physics state — `Some` once the server spawn arrives.
@@ -110,6 +131,10 @@ struct App {
     /// The next `CursorMoved` is our own `set_cursor_position` warp — skip it.
     skip_warp_event: bool,
     egui_state: Option<egui_winit::State>,
+    selected_slot: usize,
+    swing_phase: f32,
+    swing_amp: f32,
+    prev_feet: Option<[f32; 3]>,
     chat_input: String,
     chat_focused: bool,
     chat_focus_requested: bool,
@@ -192,8 +217,10 @@ impl App {
         let Some(gpu) = self.gpu.as_mut() else { return };
         for event in events {
             match event {
-                crate::net::PlayerEvent::Add(id) | crate::net::PlayerEvent::Move(id) => {
-                    let (pos, yaw, shirt) = {
+                crate::net::PlayerEvent::Add(id)
+                | crate::net::PlayerEvent::Move(id)
+                | crate::net::PlayerEvent::Held(id) => {
+                    let (pos, yaw, shirt, held, swing) = {
                         let st = state.lock().expect("state");
                         let Some(player) = st.players.get(&id) else {
                             continue;
@@ -206,9 +233,13 @@ impl App {
                             crate::atlas::tile::WOOL_YELLOW,
                             crate::atlas::tile::WOOL_GREEN,
                         ][(id % 5) as usize];
-                        (player.pos, player.yaw, shirt)
+                        let held_tile = crate::net::HOTBAR
+                            .get(player.held as usize)
+                            .map(|(b, _)| crate::atlas::tiles_for_block(*b)[0]);
+                        let swing = player.swing_phase.sin() * 0.7 * player.swing_amp;
+                        (player.pos, player.yaw, shirt, held_tile, swing)
                     };
-                    let verts = crate::mesh::player_model_mesh(shirt, pos, yaw);
+                    let verts = crate::mesh::player_model_mesh(shirt, held, pos, yaw, swing);
                     gpu.update_player(id, verts);
                 }
                 crate::net::PlayerEvent::Remove(id) => gpu.remove_player(id),
@@ -303,6 +334,23 @@ impl App {
             } else {
                 eye
             };
+
+            // Walk-swing: phase advances with ground distance moved.
+            let moved = self
+                .prev_feet
+                .map(|prev| {
+                    let dx = player.feet[0] - prev[0];
+                    let dz = player.feet[2] - prev[2];
+                    (dx * dx + dz * dz).sqrt()
+                })
+                .unwrap_or(0.0);
+            if player.on_ground && moved > 0.01 {
+                self.swing_phase += moved * 2.4;
+                self.swing_amp = (self.swing_amp + dt * 4.0).min(1.0);
+            } else {
+                self.swing_amp = (self.swing_amp - dt * 4.0).max(0.0);
+            }
+            self.prev_feet = Some(player.feet);
         }
 
         // Position reporting at a fixed rate (server relays to everyone).
@@ -328,10 +376,15 @@ impl App {
         if let Some(gpu) = self.gpu.as_mut() {
             if self.third_person {
                 if let (Some(player), Some(camera)) = (self.player.as_ref(), self.camera.as_ref()) {
+                    let held_tile = crate::net::HOTBAR[self.selected_slot].0;
+                    let held = crate::atlas::tiles_for_block(held_tile)[0];
+                    let swing = self.swing_phase.sin() * 0.7 * self.swing_amp;
                     let verts = crate::mesh::player_model_mesh(
                         crate::atlas::tile::SHIRT,
+                        Some(held),
                         player.feet,
                         camera.yaw,
+                        swing,
                     );
                     gpu.update_player(u64::MAX, verts);
                 }
@@ -356,17 +409,34 @@ impl App {
         }
     }
 
-    /// Break (left) / place (right) under the crosshair.
+    /// Broadcast the current hotbar selection.
+    fn report_held(&mut self) {
+        let _ = self
+            .edit_tx
+            .unbounded_send(melon_proto::ClientMessage::HeldItem {
+                slot: self.selected_slot as u8,
+            });
+    }
+
+    /// Break (left) / place (right) under the crosshair. Placement uses the
+    /// selected hotbar block.
     fn block_edit(&mut self, place: bool) {
         let Some(camera) = self.camera else { return };
         let edit_tx = self.edit_tx.clone();
         let state = Arc::clone(&self.state);
+        let place_block = melon_world::block::AIR;
         let msg = {
             let st = state.lock().expect("state");
+            let place_block = if place {
+                crate::net::HOTBAR[self.selected_slot].0
+            } else {
+                place_block
+            };
             st.pick_edit(
                 camera.position.to_array(),
                 camera.forward().to_array(),
                 place,
+                place_block,
             )
         };
         if let Some(msg) = msg {
@@ -402,6 +472,42 @@ impl App {
                 }
             });
         });
+
+        // Hotbar: centered above the chat panel.
+        egui::Area::new(egui::Id::new("hotbar"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -150.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    for (i, (block, label)) in crate::net::HOTBAR.iter().enumerate() {
+                        let selected = i == self.selected_slot;
+                        let color = block_color(*block);
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::click());
+                        if selected {
+                            ui.painter().rect_filled(
+                                rect.expand2(egui::vec2(3.0, 3.0)),
+                                2.0,
+                                egui::Color32::from_rgb(0x9d, 0xff, 0x57),
+                            );
+                        }
+                        ui.painter().rect_filled(rect.shrink(3.0), 2.0, color);
+                        ui.painter().text(
+                            rect.right_bottom(),
+                            egui::Align2::RIGHT_BOTTOM,
+                            format!("{}", i + 1),
+                            egui::FontId::proportional(11.0),
+                            egui::Color32::WHITE,
+                        );
+                        if response.hovered() {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                        }
+                        let response = response.on_hover_text(*label);
+                        if response.clicked() {
+                            self.selected_slot = i;
+                        }
+                    }
+                });
+            });
 
         egui::TopBottomPanel::bottom("chat").show(ctx, |ui| {
             ui.set_min_height(140.0);
@@ -513,6 +619,26 @@ impl ApplicationHandler for App {
                             self.chat_focus_requested = true;
                         }
                         return;
+                    }
+                    // Hotbar selection: number keys 1..9.
+                    if let PhysicalKey::Code(code) = event.physical_key {
+                        let slot = match code {
+                            KeyCode::Digit1 => Some(0),
+                            KeyCode::Digit2 => Some(1),
+                            KeyCode::Digit3 => Some(2),
+                            KeyCode::Digit4 => Some(3),
+                            KeyCode::Digit5 => Some(4),
+                            KeyCode::Digit6 => Some(5),
+                            KeyCode::Digit7 => Some(6),
+                            KeyCode::Digit8 => Some(7),
+                            KeyCode::Digit9 => Some(8),
+                            _ => None,
+                        };
+                        if let Some(slot) = slot {
+                            self.selected_slot = slot;
+                            self.report_held();
+                            return;
+                        }
                     }
                     // F toggles flight, F5 toggles the third-person camera.
                     if event.physical_key == PhysicalKey::Code(KeyCode::KeyF) {

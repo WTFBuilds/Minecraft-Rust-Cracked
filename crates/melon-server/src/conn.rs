@@ -213,6 +213,14 @@ where
                     });
                 }
             }
+            ClientMessage::HeldItem { slot } => {
+                if slot < 9 {
+                    world.broadcast(&ServerMessage::PlayerHeld {
+                        id: player_id,
+                        slot,
+                    });
+                }
+            }
             ClientMessage::Chat { text } => {
                 let now = std::time::Instant::now();
                 if now.duration_since(chat_window) > std::time::Duration::from_secs(10) {

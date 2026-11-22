@@ -10,6 +10,7 @@
 | 2 — Client renders a world | ✅ complete | 2026-11-22 | 46 green |
 | 3 — Connected World | ✅ complete | 2026-11-22 | 59 green |
 | 4 — Presence, chat & the player body | ✅ complete | 2026-11-23 | 67 green |
+| 5 — Hotbar, held items & swing | ✅ complete | 2026-11-23 | 68 green |
 
 ---
 
@@ -172,9 +173,33 @@ Verification after both fixes: window visible via `CGWindowList` (`screencapture
 
 ---
 
-## Phase 5 preview — Inventory & polish
+## Phase 5 — Hotbar, held items & swing ✅
 
-Next: egui hotbar + held-item sync (the UI layer is live), limb swing animation for the model, then Phase 6 combat (the collision module is what hit-validation will reuse).
+**Shipped:** the egui hotbar (9-block palette, number keys / scroll wheel / click selection), held-item sync over the protocol (`HeldItem` → relay → `PlayerHeld`), a visible held-block cube at each player's hand, block placement from the selected slot, and the limb swing animation.
+
+### Key decisions
+
+1. **Swing phase is derived, not transmitted.** The protocol sends only positions; each client advances a remote player's swing phase by the distance moved between updates (`dist × 2.4`) and decays the amplitude when they stand still. Zero protocol churn for animation.
+2. **Limb swing = pivot rotation in the mesh builder.** Legs rotate around the hip (y=0.75), arms counter-rotate around the shoulders (y=1.5), by `sin(phase) × 0.7 × amp` — computed per part, applied to vertices before the yaw rotation.
+3. **The held block rides the same rotation** as the body: a 0.3-block cube beside the right hand, tile from `tiles_for_block(held)[0]`, rebuilt with the model.
+4. **Hotbar palette is a client constant** (`HOTBAR`: grass, dirt, stone, 4 wools, iron, gold) — a full item registry arrives with survival mechanics, if ever.
+
+### Gotchas hit
+
+- **egui 0.32 API shifts:** `Response::on_hover_text` *consumes* the response (chain it); `painter().text` wants a `FontId`, not `TextStyle`; no `RectShape` needed — `rect_filled` covers it; tooltips via `response.on_hover_text`.
+- **Clippy caught my swing wiring bug before I did:** the per-part `angle` (legs +swing, arms −swing) was computed but the rotation still used the *global* swing sin/cos — arms would have swung in lockstep with legs. The per-part `angle.sin_cos()` fixed counter-swinging.
+- **The debug histogram had its own bug** (`[f32::INFINITY; 2]` for both min and max tracking) — a reminder that even diagnostic code needs its invariants checked.
+
+### Numbers
+
+- **68 tests green** · fmt + clippy `-D warnings` clean.
+- Visual gate: the body renders with the held gold cube beside the right hand and the swing pose active.
+
+---
+
+## Phase 6 preview — Combat
+
+Next: swings + hits (server ray-trace validation reusing `melon-world::raycast`), 1.8 knockback constants, and a health/respawn minimal loop.
 
 ---
 

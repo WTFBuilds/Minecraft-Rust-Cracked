@@ -413,7 +413,34 @@ async fn invalid_edit_is_silently_rejected_and_session_survives() {
     }
 }
 
-// --- Phase 4: presence + chat ----------------------------------------------
+// --- Phase 5: held-item sync -----------------------------------------------
+
+#[tokio::test]
+async fn held_item_relay_stamps_sender_id() {
+    let addr = spawn_server().await;
+    let mut a = connect(addr).await;
+    let a_id = handshake_ok(&mut a, "Alice").await;
+    read_world(&mut a).await;
+    skip_presence(&mut a).await;
+
+    a.send(ClientMessage::HeldItem { slot: 4 })
+        .await
+        .expect("send held");
+    match a.next().await.expect("held relay").expect("no codec error") {
+        ServerMessage::PlayerHeld { id, slot } => {
+            assert_eq!(id, a_id);
+            assert_eq!(slot, 4);
+        }
+        other => panic!("unexpected message: {other:?}"),
+    }
+
+    // Invalid slots are dropped, not relayed.
+    a.send(ClientMessage::HeldItem { slot: 42 })
+        .await
+        .expect("send bad slot");
+    let noise = tokio::time::timeout(Duration::from_millis(250), a.next()).await;
+    assert!(noise.is_err(), "invalid slot must not relay");
+}
 
 #[tokio::test]
 async fn presence_lifecycle_join_roster_leave() {

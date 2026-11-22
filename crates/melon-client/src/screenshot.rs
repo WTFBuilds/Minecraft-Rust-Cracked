@@ -225,7 +225,14 @@ pub fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
             (buffer, count)
         })
         .collect();
-    let player_verts = mesh::player_model_mesh(atlas::tile::SHIRT, body_feet, body_yaw);
+    let held_gold = atlas::tiles_for_block(melon_world::block::GOLD_BLOCK)[0];
+    let player_verts = mesh::player_model_mesh(
+        atlas::tile::SHIRT,
+        Some(held_gold),
+        body_feet,
+        body_yaw,
+        0.35,
+    );
     {
         let mut groups: std::collections::BTreeMap<(i32, i32), usize> = Default::default();
         for v in &player_verts {

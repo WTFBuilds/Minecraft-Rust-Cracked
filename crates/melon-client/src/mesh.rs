@@ -195,7 +195,13 @@ struct Part {
 ///
 /// Proportions follow Minecraft's model (legs 0.75, torso 0.75, head 0.5 —
 /// 2.0 blocks tall visually; collision stays 1.8).
-pub fn player_model_mesh(shirt_tile: u8, feet: [f32; 3], yaw: f32) -> Vec<Vertex> {
+pub fn player_model_mesh(
+    shirt_tile: u8,
+    held_tile: Option<u8>,
+    feet: [f32; 3],
+    yaw: f32,
+    swing: f32,
+) -> Vec<Vertex> {
     // Front = +X (the facing axis). Left/right offsets live on Z, and the
     // torso/arms/legs are 0.25 deep along X — Minecraft's model rotated so
     // the face looks along +X.
@@ -244,18 +250,39 @@ pub fn player_model_mesh(shirt_tile: u8, feet: [f32; 3], yaw: f32) -> Vec<Vertex
     ];
 
     let (sin, cos) = yaw.sin_cos();
-    let mut vertices = Vec::with_capacity(parts.len() * 36);
+    let mut vertices = Vec::with_capacity(parts.len() * 36 + 36);
     for part in &parts {
         let [w, h, d] = part.dims;
+        // Limb swing: legs swing by `swing`, arms counter-swing. The swing
+        // rotates each limb around its top pivot (hip / shoulder) in the
+        // local forward plane.
+        let is_leg = part.origin[1] == 0.0;
+        let is_arm = part.origin[1] == 0.75 && part.dims[0] == 0.25 && w == 0.25;
+        let (pivot_y, angle) = if is_leg {
+            (0.75, swing)
+        } else if is_arm {
+            (1.5, -swing)
+        } else {
+            (0.0, 0.0)
+        };
+        let (swing_sin, swing_cos) = angle.sin_cos();
         for (face_i, face) in FACES.iter().enumerate() {
             let [u0, v0, u1, v1] = tile_uv(part.tiles[face_i]);
             for &ci in &QUAD_INDEX_PATTERN {
                 let corner = &face.corners[ci];
                 let uv = &face.uvs[ci];
                 // Local box position (min corner + scaled corner).
-                let lx = part.origin[0] + corner[0] as f32 * w;
-                let ly = part.origin[1] + corner[1] as f32 * h;
+                let mut lx = part.origin[0] + corner[0] as f32 * w;
+                let mut ly = part.origin[1] + corner[1] as f32 * h;
                 let lz = part.origin[2] + corner[2] as f32 * d;
+                // Swing rotation around the limb pivot (local x/y plane).
+                if is_leg || is_arm {
+                    let dy = ly - pivot_y;
+                    let nlx = lx * swing_cos - dy * swing_sin;
+                    let nly = pivot_y + lx * swing_sin + dy * swing_cos;
+                    lx = nlx;
+                    ly = nly;
+                }
                 // Rotate around the feet origin (yaw) and translate.
                 let wx = feet[0] + lx * cos - lz * sin;
                 let wz = feet[2] + lx * sin + lz * cos;
@@ -263,6 +290,29 @@ pub fn player_model_mesh(shirt_tile: u8, feet: [f32; 3], yaw: f32) -> Vec<Vertex
                     position: [wx, feet[1] + ly, wz],
                     uv: [u0 + uv[0] * (u1 - u0), v0 + uv[1] * (v1 - v0)],
                     shade: face.shade,
+                });
+            }
+        }
+    }
+
+    // Held block: a small cube floating at the right hand when selected.
+    if let Some(held_tile) = held_tile {
+        let [u0, v0, u1, v1] = tile_uv(held_tile);
+        let center = [0.28, 1.02, 0.375]; // beside the right hand
+        let s = 0.15; // half-size
+        for face in FACES.iter() {
+            for &ci in &QUAD_INDEX_PATTERN {
+                let corner = &face.corners[ci];
+                let uv = &face.uvs[ci];
+                let lx = center[0] + (corner[0] as f32 - 0.5) * 2.0 * s;
+                let ly = center[1] + (corner[1] as f32 - 0.5) * 2.0 * s;
+                let lz = center[2] + (corner[2] as f32 - 0.5) * 2.0 * s;
+                let wx = feet[0] + lx * cos - lz * sin;
+                let wz = feet[2] + lx * sin + lz * cos;
+                vertices.push(Vertex {
+                    position: [wx, feet[1] + ly, wz],
+                    uv: [u0 + uv[0] * (u1 - u0), v0 + uv[1] * (v1 - v0)],
+                    shade: face.shade.max(0.75),
                 });
             }
         }
@@ -379,7 +429,7 @@ mod tests {
 
     #[test]
     fn player_model_is_six_boxes_with_face_front() {
-        let verts = player_model_mesh(tile::SHIRT, [0.0, 6.0, 0.0], 0.0);
+        let verts = player_model_mesh(tile::SHIRT, None, [0.0, 6.0, 0.0], 0.0, 0.0);
         // legs 2 + torso 1 + arms 2 + head 1 = 6 boxes × 36 vertices.
         assert_eq!(verts.len(), 216);
         // Feet at the bottom, head top at 2.0 (legs 0.75 + torso 0.75 + head 0.5).
@@ -396,7 +446,13 @@ mod tests {
             (max_x - 0.25).abs() < 1e-4,
             "depth is 0.25 along the facing"
         );
-        let rotated = player_model_mesh(tile::SHIRT, [0.0, 6.0, 0.0], std::f32::consts::FRAC_PI_2);
+        let rotated = player_model_mesh(
+            tile::SHIRT,
+            None,
+            [0.0, 6.0, 0.0],
+            std::f32::consts::FRAC_PI_2,
+            0.0,
+        );
         let rot_max_x = rotated
             .iter()
             .map(|v| v.position[0])

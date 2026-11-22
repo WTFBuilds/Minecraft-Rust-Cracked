@@ -27,7 +27,24 @@ pub struct RemotePlayer {
     pub pos: [f32; 3],
     pub yaw: f32,
     pub pitch: f32,
+    pub held: u8,
+    /// Walk-swing phase, advanced by the distance moved between updates.
+    pub swing_phase: f32,
+    pub swing_amp: f32,
 }
+
+/// The hotbar palette: (block id, display name) per slot.
+pub const HOTBAR: [(u16, &str); 9] = [
+    (1, "grass"),
+    (2, "dirt"),
+    (3, "stone"),
+    (4, "red wool"),
+    (5, "blue wool"),
+    (6, "yellow wool"),
+    (7, "green wool"),
+    (8, "iron"),
+    (9, "gold"),
+];
 
 /// GPU-facing player updates, drained by the GUI each frame.
 #[derive(Debug, Clone, Copy)]
@@ -35,6 +52,7 @@ pub enum PlayerEvent {
     Add(u64),
     Remove(u64),
     Move(u64),
+    Held(u64),
 }
 
 /// Shared between the GUI thread and the network thread.
@@ -115,7 +133,13 @@ impl ClientState {
 
     /// Pick a block edit under the crosshair: `place` places stone on the
     /// hit face, breaking sets the hit block to air.
-    pub fn pick_edit(&self, origin: [f32; 3], dir: [f32; 3], place: bool) -> Option<ClientMessage> {
+    pub fn pick_edit(
+        &self,
+        origin: [f32; 3],
+        dir: [f32; 3],
+        place: bool,
+        place_block: u16,
+    ) -> Option<ClientMessage> {
         let hit = raycast(&self.world, origin, dir, 6.0)?;
         if place {
             let [x, y, z] = hit.neighbor();
@@ -124,7 +148,7 @@ impl ClientState {
                     x,
                     y,
                     z,
-                    block: block::STONE,
+                    block: place_block,
                 })
             } else {
                 None
@@ -248,6 +272,9 @@ impl ClientState {
                             pos: [8.0, 6.0, 8.0],
                             yaw: 0.0,
                             pitch: 0.0,
+                            held: 0,
+                            swing_phase: 0.0,
+                            swing_amp: 0.0,
                         }
                     });
                     player.name = name;
@@ -262,6 +289,9 @@ impl ClientState {
                             pos: [8.0, 6.0, 8.0],
                             yaw: 0.0,
                             pitch: 0.0,
+                            held: 0,
+                            swing_phase: 0.0,
+                            swing_amp: 0.0,
                         },
                     );
                     self.player_events.push(PlayerEvent::Add(id));
@@ -288,6 +318,12 @@ impl ClientState {
                     player.yaw = yaw;
                     player.pitch = pitch;
                     self.player_events.push(PlayerEvent::Move(id));
+                }
+            }
+            ServerMessage::PlayerHeld { id, slot } => {
+                if let Some(player) = self.players.get_mut(&id) {
+                    player.held = slot;
+                    self.player_events.push(PlayerEvent::Held(id));
                 }
             }
             ServerMessage::Chat { id, name, text } => {

@@ -67,11 +67,13 @@
 - [ ] Chat messages (text only) with rate limiting
 - [ ] Acceptance: two windows see each other move and chat
 
-## Phase 5 — Inventory & polish
+## Phase 5 — Inventory & polish ✅
 
-- [ ] Hotbar UI (egui) + held-item sync (the body model from Phase 4 is in)
-- [ ] Walk/limb swing animation for the player model
-- [ ] Acceptance: hotbar select shows the right held item remotely
+- [x] Hotbar UI (egui): 9-block palette, selection via number keys / scroll wheel / click
+- [x] Held-item sync: `HeldItem` → server relay → `PlayerHeld` — the held block renders as a cube at the player's hand
+- [x] Block placement uses the selected hotbar slot
+- [x] Walk/limb swing animation (phase advances with distance moved, settles when standing)
+- [x] Acceptance: hotbar select shows the right held item remotely (e2e: held relay stamped with sender id, invalid slots dropped)
 
 ## Phase 6 — Combat
 

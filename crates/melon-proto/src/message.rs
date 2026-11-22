@@ -83,6 +83,10 @@ pub enum ClientMessage {
     Chat {
         text: String,
     },
+    /// Hotbar selection changed (slot index into the client palette).
+    HeldItem {
+        slot: u8,
+    },
 }
 
 /// Where the server drops a player after auth: position + look direction
@@ -143,6 +147,8 @@ pub enum ServerMessage {
     },
     /// A chat line, stamped with the sender's id + name.
     Chat { id: u64, name: String, text: String },
+    /// A player's hotbar selection changed.
+    PlayerHeld { id: u64, slot: u8 },
 }
 
 /// Maximum chat message length.
@@ -339,6 +345,7 @@ mod tests {
         let chat_in = ClientMessage::Chat {
             text: "hi".to_string(),
         };
+        let held_in = ClientMessage::HeldItem { slot: 3 };
 
         for msg in [accepted, roster, join, leave, moved, chat] {
             let bytes =
@@ -348,7 +355,7 @@ mod tests {
                     .expect("decode");
             assert_eq!(decoded, msg);
         }
-        for msg in [move_in, chat_in] {
+        for msg in [move_in, chat_in, held_in] {
             let bytes =
                 bincode::serde::encode_to_vec(&msg, bincode::config::standard()).expect("encode");
             let (decoded, _): (ClientMessage, _) =
@@ -356,5 +363,11 @@ mod tests {
                     .expect("decode");
             assert_eq!(decoded, msg);
         }
+        let held_out = ServerMessage::PlayerHeld { id: 1, slot: 3 };
+        let bytes =
+            bincode::serde::encode_to_vec(&held_out, bincode::config::standard()).expect("encode");
+        let (decoded, _): (ServerMessage, _) =
+            bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).expect("decode");
+        assert_eq!(decoded, held_out);
     }
 }
