@@ -9,6 +9,7 @@ mod camera;
 mod gui;
 mod headless;
 mod mesh;
+mod net;
 mod renderer;
 mod screenshot;
 
@@ -108,7 +109,7 @@ fn main() {
             std::process::exit(1);
         }
     } else {
-        if let Err(err) = gui::run() {
+        if let Err(err) = gui::run(&args.host, args.port, &args.name) {
             eprintln!("error: {err}");
             std::process::exit(1);
         }

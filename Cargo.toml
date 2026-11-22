@@ -29,6 +29,9 @@ glam = "0.30"
 bytemuck = { version = "1", features = ["derive"] }
 wgpu = "25"
 winit = "0.30"
+egui = "0.32"
+egui-wgpu = "0.32"
+egui-winit = "0.32"
 pollster = "0.4"
 
 [profile.release]

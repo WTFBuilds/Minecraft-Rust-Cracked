@@ -9,10 +9,17 @@
 //! us what the real access patterns look like.
 
 pub mod chunk;
+pub mod collision;
 pub mod flat;
+pub mod raycast;
 
-pub use chunk::{Chunk, Section, World, CHUNK_H, CHUNK_W, SECTION_SIZE};
+pub use chunk::{Chunk, Section, WireError, World, CHUNK_H, CHUNK_W, SECTION_SIZE};
+pub use collision::{
+    is_solid, step, GRAVITY, JUMP_VELOCITY, PLAYER_EYE_HEIGHT, PLAYER_HEIGHT, PLAYER_WIDTH,
+    TERMINAL_VELOCITY, WALK_SPEED,
+};
 pub use flat::FlatGenerator;
+pub use raycast::{raycast, RayHit};
 
 /// Block IDs are the platform's own — no vanilla mapping table lives here.
 /// Blocks the BedWars entity set actually touches for Phase 1–3.

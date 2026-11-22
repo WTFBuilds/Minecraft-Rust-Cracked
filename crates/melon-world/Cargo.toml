@@ -6,3 +6,4 @@ license.workspace = true
 description = "MELON shared world model: block registry, chunk storage, arena generation"
 
 [dependencies]
+thiserror = { workspace = true }

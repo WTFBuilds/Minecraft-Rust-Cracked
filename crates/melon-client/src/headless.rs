@@ -1,11 +1,15 @@
 //! Headless client: the protocol session without a window. Used for the
-//! Phase 1 acceptance demo, CI smoke tests, and later as the base for
-//! scripted load-test bots.
+//! acceptance demos, CI smoke tests, and later as the base for scripted
+//! load-test bots.
+//!
+//! Phase 3 flow: auth → receive the streamed world → pings → place a block
+//! and watch it echo back.
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use futures::{SinkExt, StreamExt};
 use melon_proto::{ClientMessage, ClientSessionCodec, Handshake, ServerMessage, PROTOCOL_VERSION};
+use melon_world::block;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
@@ -16,7 +20,7 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Connect, authenticate, and run a ping loop — the Phase 1 session spine.
+/// Connect, authenticate, receive the world, ping, and prove block edits.
 pub async fn run(
     host: &str,
     port: u16,
@@ -44,6 +48,7 @@ pub async fn run(
         ServerMessage::HandshakeResult {
             accepted,
             protocol_version,
+            player_id: _,
             server_name,
             motd,
             rejection,
@@ -60,6 +65,41 @@ pub async fn run(
         other => return Err(format!("unexpected message: {other:?}").into()),
     }
 
+    // --- Phase 3: world stream ---
+    let mut expected_chunks = 0u32;
+    let mut received_chunks = 0u32;
+    let mut chunk_bytes = 0usize;
+    loop {
+        let msg = framed
+            .next()
+            .await
+            .ok_or("server closed during world stream")??;
+        match msg {
+            ServerMessage::WorldInfo(info) => {
+                expected_chunks = info.chunks;
+                let [sx, sy, sz] = info.spawn;
+                println!("world: spawn ({sx:.1}, {sy:.1}, {sz:.1}) · {expected_chunks} chunks");
+                if expected_chunks == 0 {
+                    break;
+                }
+            }
+            ServerMessage::ChunkData(chunk) => {
+                received_chunks += 1;
+                chunk_bytes += chunk.sections.len();
+                if received_chunks == expected_chunks {
+                    println!(
+                        "world received: {received_chunks} chunks · {chunk_bytes} bytes of sections"
+                    );
+                    break;
+                }
+            }
+            other => {
+                return Err(format!("unexpected message during world stream: {other:?}").into())
+            }
+        }
+    }
+
+    // --- pings ---
     for i in 0..pings {
         let sent = Instant::now();
         framed
@@ -77,6 +117,32 @@ pub async fn run(
         }
     }
 
-    println!("done — {pings} pings, session healthy");
+    // --- Phase 3: block edit → server broadcast echo ---
+    let edit_pos = [2i32, 6, 2];
+    framed
+        .send(ClientMessage::SetBlock {
+            x: edit_pos[0],
+            y: edit_pos[1],
+            z: edit_pos[2],
+            block: block::WOOL_RED,
+        })
+        .await?;
+    let msg = framed
+        .next()
+        .await
+        .ok_or("server closed before block update")??;
+    match msg {
+        ServerMessage::BlockUpdate { x, y, z, block } => {
+            assert_eq!(
+                (x, y, z, block),
+                (edit_pos[0], edit_pos[1], edit_pos[2], block::WOOL_RED),
+                "our own edit must echo back"
+            );
+            println!("block edit echoed — set ({x}, {y}, {z}) to wool:red ✔");
+        }
+        other => return Err(format!("unexpected message during edit: {other:?}").into()),
+    }
+
+    println!("done — world streamed, {pings} pings, block edit verified");
     Ok(())
 }

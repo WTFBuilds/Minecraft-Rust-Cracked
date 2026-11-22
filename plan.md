@@ -48,14 +48,18 @@
 
 *Interactive fly-cam feel gets human eyes: `cargo run -p melon-client`.*
 
-## Phase 3 — Server-hosted world & block sync
+## Phase 3 — Connected World ✅
 
 **Goal: the server owns the world; clients see and edit it.**
+**Acceptance: two clients edit the same server-side world and agree (e2e proves the broadcast path; two windows work live).**
 
-- [ ] `melon-server`: send world chunks to a client after handshake
-- [ ] `melon-client`: receive chunks into a world cache, re-mesh dirty sections
-- [ ] Block place/break: client request → server validation → broadcast batch
-- [ ] Acceptance: two GUI clients edit the same server-side world and agree
+- [x] `melon-world`: chunk wire codec (`encode_sections`/`decode_sections` — non-empty sections only, 8 KB per superflat chunk) + voxel raycast (Amanatides–Woo DDA, unit tested)
+- [x] Protocol v1 additions: `WorldInfo` · `ChunkData` · `SetBlock` · `BlockUpdate`
+- [x] `melon-server`: `WorldHandle` (shared world + sender registry) — post-auth world stream, validated edits, broadcast to every client, `--world-size` flag
+- [x] `melon-client`: background network thread + shared `ClientState`; chunks → world cache → dirty sections → GPU re-mesh
+- [x] Block place/break: raycast pick (LMB break / RMB place) → server validation → broadcast → all clients re-mesh
+- [x] e2e: world stream shape, cross-client broadcast, invalid-edit silent rejection + session survival
+- [x] Acceptance demo: headless client streams 16 chunks (131 KB), pings, and verifies its edit echoes back
 
 ## Phase 4 — Presence & chat
 
@@ -63,10 +67,10 @@
 - [ ] Chat messages (text only) with rate limiting
 - [ ] Acceptance: two windows see each other move and chat
 
-## Phase 5 — Player model & inventory
+## Phase 5 — Inventory & polish
 
-- [ ] Humanoid model (own, simple geometry) + walk animation
-- [ ] Hotbar UI (egui) + held-item sync
+- [ ] Hotbar UI (egui) + held-item sync (the body model from Phase 4 is in)
+- [ ] Walk/limb swing animation for the player model
 - [ ] Acceptance: hotbar select shows the right held item remotely
 
 ## Phase 6 — Combat

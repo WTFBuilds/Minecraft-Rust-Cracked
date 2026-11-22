@@ -8,6 +8,8 @@
 | 0 — Workspace & CI | ✅ complete | 2026-11-22 | — |
 | 1 — Protocol spine | ✅ complete | 2026-11-22 | 26 green |
 | 2 — Client renders a world | ✅ complete | 2026-11-22 | 46 green |
+| 3 — Connected World | ✅ complete | 2026-11-22 | 59 green |
+| 4 — Presence, chat & the player body | ✅ complete | 2026-11-23 | 67 green |
 
 ---
 
@@ -96,18 +98,100 @@
 
 ---
 
-## Phase 3 preview — Connected World
+## Phase 3 — Connected World ✅
 
-Next: the server owns the world. `ChunkData` messages stream over `melon-proto`, the client caches + re-meshes dirty sections, and block place/break becomes a validated server-side broadcast. The mesher's world-space vertices and the protocol's versioned handshake are already shaped for this — the server just needs a session loop that sends sections after auth.
+**Shipped:** the server owns the world. After auth it streams every chunk; clients re-mesh dirty sections locally; left/right clicks raycast-pick a block, the server validates the edit and broadcasts it to everyone.
+
+### Key decisions
+
+1. **Chunk wire format: non-empty sections only.** A raw chunk is 128 KB; a superflat chunk has exactly one populated section → 8 KB + a 16-bit section mask. The full 4×4 dev world travels as 131 KB. Encoding/decoding lives in `melon-world` (`encode_sections`/`decode_sections`) so client and server can never drift — and all-air sections recreate as empty on decode.
+2. **Perspective codecs paid off immediately.** The Phase 3 server session splits the framed connection: a per-connection **writer task** drains an outbound channel, and a **sender registry** (`WorldHandle`) fans broadcasts out to every client. Direction confusion stayed unrepresentable, and adding the broadcast path was registry + one writer task.
+3. **Shared dev world, not an actor (yet).** `WorldHandle` is a `World` behind a mutex + registry — deliberate: this is the lobby-style world, and the *one actor per match* rule applies to the match runtime in Phase 8. Documented, not forgotten.
+4. **No client-side prediction.** Clicks send `SetBlock`; the server validates (world bounds), applies, and broadcasts a `BlockUpdate` that **every** client — including the editor — applies. Idempotent, correct, and on LAN the latency is invisible. Prediction/rollback arrives when latency makes it matter.
+5. **Dirty-section marking includes boundary neighbors.** A block at local x=0 changes faces in the neighboring section too — the client marks section ±1 along every axis whose local coordinate sits on a border. Missing this is the classic "hole at chunk boundary" bug.
+6. **Voxel raycast (Amanatides & Woo DDA) lives in `melon-world`,** dependency-free (`[f32;3]` in/out) — the client uses it for picking, Phase 6 server hit-validation will reuse it. Starting-voxel-solid returns `None` (nothing sensible to pick).
+7. **Headless client grew the full Phase 3 flow** — it streams the world, pings, places a block, and verifies its own edit echoes. `./setup.sh demo` is now a complete protocol exercise, and it doubles as the base for load-test bots.
+
+### Gotchas hit (and fixed)
+
+- **The DDA raycast had a real bug:** the loop never advanced `t_max` by `t_delta` — it would walk the same boundary forever. Caught because clippy flagged `t_delta` as unused *before any test ran*. Then the sideways-hit test caught a second subtlety: in a superflat world a horizontal ray at grass height **starts inside a solid block** — the test was rewritten against a single-block world.
+- **World stream changed every existing e2e test:** the server now sends `WorldInfo` + chunks *before* session replies, so tests that expected an immediate `Pong` broke. The `read_world` helper consumes the stream and skips the handshake result — lesson: when the protocol gains a mandatory sequence, update the test harness's flow helpers, not each assertion.
+- **`Chunk` isn't `PartialEq`** (16 KB of blocks) — error-path tests use `matches!` instead of `assert_eq!` on `Result<Chunk>`.
+- **`WorldInfo` carries an `f32`** → the `Eq` derive on `ServerMessage` had to go (partial_eq is enough).
+- **fmt churn between edits:** several Write-attempt failures because `cargo fmt` reformat files between operations — always Read-before-Write after running fmt.
+- **Unclosed delimiter from a surgical edit** — one missing `mod tests` brace surfaced as a single cryptic error; fixed by reading the tail of the file.
+
+### Live-fire bugs (found the moment a human ran the client)
+
+The e2e suite was green, but the first real `./setup.sh client` produced **"nothing happens"** — process alive, no window. Two bugs were hiding behind the tests:
+
+1. **Same-statement mutex deadlock.** `println!("…", state.lock().….server_name, state.lock().….motd)` — two `lock()` temporaries in *one statement* live until the statement ends, so the second lock deadlocked against the first **on the same thread**. It fired *before* window creation → no window, no error, just a hung process. Rule learned: **one lock scope per statement, always `{ let st = …; }`.** Found via `sample <pid>` — the main thread was parked in `pthread_mutex_lock` at gui.rs:40.
+2. **A tokio `TcpStream` is welded to the runtime that created it.** `connect_and_auth` ran on the GUI thread's *temporary* runtime; the connection then moved to the net thread's runtime — whose reads failed with *"A Tokio 1.x context was found, but it is being shutdown"* as soon as the first runtime dropped. Fix: connect + auth + session all live on the **one** network thread/runtime; the GUI learns the auth outcome through a `std::sync::mpsc` channel and fails fast before opening a window. (Bonus: connect now has a 5 s timeout with a "is the server running?" hint.)
+
+Verification after both fixes: window visible via `CGWindowList` (`screencapture -R` shows the **server-streamed** world rendering — grass/dirt/stone/bedrock layers at the world edge), plus the log sequence `connected → window up`.
+
+**Standing rules added:** never hold a `MutexGuard` across another lock acquisition in the same statement; never move a tokio IO object across runtimes — spawn the IO *on* the runtime that will own it, and communicate results through channels.
+
+### Numbers
+
+- **59 tests green** (world 16 · proto 15 · client 20 · server e2e 8) · fmt + clippy `-D warnings` clean.
+- World stream: **16 chunks · 131,072 bytes** (exactly 16 × 8192 — the math checks out on the wire).
+- Demo: auth → world → 4 pings (~150–420 µs) → `SetBlock (2,6,2) wool:red` → broadcast echo verified.
+- GUI: connects, streams, renders, edits — verified alive with the server running.
+
+---
+
+## Phase 4 — Presence, chat & the player body ✅
+
+**Shipped:** presence (join/roster/leave with server-assigned ids), chat (egui panel, validated + rate-limited), the Minecraft-style player body (head/torso/arms/legs, yaw-oriented), and **real player physics** — gravity, AABB-vs-voxel collision, jumping. Players now stand on blocks.
+
+### Key decisions
+
+1. **Server-assigned player ids in the handshake reply.** The client learns `player_id` in `HandshakeResult` and filters its own broadcast echoes (moves/chat) client-side — the server broadcasts to everyone including the sender, which keeps the server dumb and the client logic local.
+2. **Per-player spawn offsets.** `spawn_for(id)` shifts each player 3 blocks along x so simultaneous joins don't stack inside each other.
+3. **Throttling lives on the server:** movement relays at most one `PlayerMove` per 50 ms per player; chat max 5 per 10 s + length/control-character validation. Clients stay honest; the server stays calm.
+4. **egui entered the stack** (egui + egui-wgpu + egui-winit 0.32 — the version that pins wgpu 25, our exact version). Status header + chat panel; the chat field captures the keyboard while focused (T to open, Enter to send, Esc to cancel) and camera input is suppressed meanwhile.
+5. **Physics lives in `melon-world`** (`collision::step`): per-axis resolution (Y → X → Z) so wall-sliding works, gravity 32 blocks/s², jump velocity 9 (clears 1.25 blocks), walk speed 4.317. Feet-based position; the camera derives eye = feet + 1.62.
+6. **The body model is 6 boxes with Minecraft proportions** (legs 0.75, torso 0.75, head 0.5), assembled in local space, yaw-rotated at build time (~216 verts per player, rebuilt on every move — trivial). Skin set in the atlas: skin/face/hair/shirt/pants tiles; shirt color varies per player id.
+
+### Gotchas hit (and fixed)
+
+- **THE big one — the part-layout axis bug.** My first body placed the arm/leg offsets along **X — the facing axis** — instead of Z (left-right). From the front view the arms ended up in front of / behind the torso: the right arm (closer) occluded it, the left arm + one leg hid behind it, and the whole body rendered as a thin "stick". The mesh probes kept saying the data was correct — because it was — the LAYOUT was wrong, not the code. Diagnosed by pixel-scanning the rendered columns (one 0.27-block skin run + one 0.22-block pants run = exactly one arm + one leg, centered) and by a vertex histogram grouped by (height band, atlas tile). **Lesson: a "wrong render" with a "correct mesh" means the layout is wrong — check which axis your offsets are on.**
+- **Same-statement mutex deadlock** (`println!("…", state.lock()…, state.lock()…)`) — two lock temporaries in one statement deadlock on the same thread. Fired before window creation → "nothing happens". Found via `sample <pid>`.
+- **A tokio `TcpStream` is welded to the runtime that created it.** Connect+auth ran on the GUI thread's temporary runtime; the session then moved the connection to the net thread's runtime → *"A Tokio 1.x context was found, but it is being shutdown"*. Fix: connect+auth+session all on the ONE network thread; the GUI learns the auth outcome through a channel.
+- **The atlas checker pass ate the skin tiles** — the "known tiles" guard only protected row 0, so the checker overwrote row 1 (skin set) with the missing-texture checker. The atlas test caught it (opacity per pixel).
+- **Two of my own test bugs:** `1000 + u64::MAX` overflow (wrapping_add), and a histogram with `[f32::INFINITY; 2]` used for BOTH min and max tracking (max slot never updated). Also an off-by-one in the superflat layer expectations.
+- **egui/winit/wgpu version dance:** egui-wgpu 0.32.3 pins wgpu 25.0.2 — exactly ours (checked with `cargo tree`). winit 0.30: `Key::Character(SmolStr)` compares via `matches!` + `eq_ignore_ascii_case`; `ActiveEventLoop::exit()` takes no args; `SurfaceConfiguration` requires `desired_maximum_frame_latency`.
+- **egui borrow pattern:** take the `egui_winit::State` out of its `Option` for the frame (`take()` → run → put back) so the paint closure can borrow all of `App` without overlapping the state borrow.
+
+### Numbers
+
+- **67 tests green** (world 21 incl. 5 collision · proto 16 · client 22 · e2e 8) · fmt + clippy `-D warnings` clean.
+- Physics verified by simulation tests: landing exactly on y=6, jump apex 1.25 blocks, wall clamp, flat-ground stability, void-fall documentation.
+- Model verified visually via the offscreen screenshot gate: face + eyes, hair, shirt, arms, pants — correct proportions and yaw.
+
+---
+
+## Phase 5 preview — Inventory & polish
+
+Next: egui hotbar + held-item sync (the UI layer is live), limb swing animation for the model, then Phase 6 combat (the collision module is what hit-validation will reuse).
 
 ---
 
 ## Demo / smoke-test commands
 
 ```bash
-cargo test --workspace                                  # all gates (46 tests)
-cargo run -p melon-server                               # starts on 127.0.0.1:25777
-cargo run -p melon-client -- --headless --name YourName # handshake + ping RTT
-cargo run -p melon-client                               # Phase 2 world window (ESC to quit)
+./setup.sh                       # build + demo: server starts, headless client streams world + edits
+./setup.sh server                # server in the foreground (--world-size via MELON_WORLD_SIZE)
+./setup.sh client                # connected world window (LMB break · RMB place · ESC quit)
+./setup.sh play                  # server (background) + window together, auto-cleanup
+./setup.sh headless              # world stream + pings + block-edit echo on stdout
+./setup.sh screenshot            # offscreen visual gate → /tmp/melon-frame.png
+./setup.sh test                  # fmt + clippy -D warnings + all tests
+
+# raw cargo equivalents
+cargo test --workspace                                   # all gates (59 tests)
+cargo run -p melon-server                                # starts on 127.0.0.1:25777
+cargo run -p melon-client -- --headless --name YourName  # world + pings + block edit
 cargo run -p melon-client -- --screenshot /tmp/frame.png # offscreen visual gate
 ```

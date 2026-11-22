@@ -11,7 +11,7 @@ use glam::Vec3;
 use melon_world::block;
 use melon_world::chunk::{World, CHUNK_H, SECTION_SIZE};
 
-use crate::atlas::{tile_uv, tiles_for_block};
+use crate::atlas::{tile, tile_uv, tiles_for_block};
 
 /// One terrain vertex. 36 bytes.
 #[repr(C)]
@@ -181,9 +181,99 @@ pub fn mesh_world(world: &World) -> Vec<((i32, i32, i32), Vec<Vertex>)> {
     out
 }
 
+/// Minecraft-style body parts, assembled by [`player_model_mesh`].
+/// Local-space boxes; front = +X (rotated by yaw at build time).
+struct Part {
+    origin: [f32; 3],
+    dims: [f32; 3],
+    tiles: [u8; 6],
+}
+
+/// Build the Minecraft-style player body: two legs, a torso, two arms and a
+/// head (with a face on its front). `feet` is the bottom-center position and
+/// `yaw` orients the body's front along the movement heading.
+///
+/// Proportions follow Minecraft's model (legs 0.75, torso 0.75, head 0.5 —
+/// 2.0 blocks tall visually; collision stays 1.8).
+pub fn player_model_mesh(shirt_tile: u8, feet: [f32; 3], yaw: f32) -> Vec<Vertex> {
+    // Front = +X (the facing axis). Left/right offsets live on Z, and the
+    // torso/arms/legs are 0.25 deep along X — Minecraft's model rotated so
+    // the face looks along +X.
+    let parts = [
+        // legs — pants, side by side along Z
+        Part {
+            origin: [-0.125, 0.0, -0.25],
+            dims: [0.25, 0.75, 0.25],
+            tiles: [tile::PANTS; 6],
+        },
+        Part {
+            origin: [-0.125, 0.0, 0.0],
+            dims: [0.25, 0.75, 0.25],
+            tiles: [tile::PANTS; 6],
+        },
+        // torso — shirt
+        Part {
+            origin: [-0.125, 0.75, -0.25],
+            dims: [0.25, 0.75, 0.5],
+            tiles: [shirt_tile; 6],
+        },
+        // arms — skin, flanking the torso along Z
+        Part {
+            origin: [-0.125, 0.75, -0.5],
+            dims: [0.25, 0.75, 0.25],
+            tiles: [tile::SKIN; 6],
+        },
+        Part {
+            origin: [-0.125, 0.75, 0.25],
+            dims: [0.25, 0.75, 0.25],
+            tiles: [tile::SKIN; 6],
+        },
+        // head — hair on top/back/sides, face on the front (+X)
+        Part {
+            origin: [-0.25, 1.5, -0.25],
+            dims: [0.5, 0.5, 0.5],
+            tiles: [
+                tile::FACE,
+                tile::HAIR,
+                tile::HAIR,
+                tile::HAIR,
+                tile::HAIR,
+                tile::HAIR,
+            ],
+        },
+    ];
+
+    let (sin, cos) = yaw.sin_cos();
+    let mut vertices = Vec::with_capacity(parts.len() * 36);
+    for part in &parts {
+        let [w, h, d] = part.dims;
+        for (face_i, face) in FACES.iter().enumerate() {
+            let [u0, v0, u1, v1] = tile_uv(part.tiles[face_i]);
+            for &ci in &QUAD_INDEX_PATTERN {
+                let corner = &face.corners[ci];
+                let uv = &face.uvs[ci];
+                // Local box position (min corner + scaled corner).
+                let lx = part.origin[0] + corner[0] as f32 * w;
+                let ly = part.origin[1] + corner[1] as f32 * h;
+                let lz = part.origin[2] + corner[2] as f32 * d;
+                // Rotate around the feet origin (yaw) and translate.
+                let wx = feet[0] + lx * cos - lz * sin;
+                let wz = feet[2] + lx * sin + lz * cos;
+                vertices.push(Vertex {
+                    position: [wx, feet[1] + ly, wz],
+                    uv: [u0 + uv[0] * (u1 - u0), v0 + uv[1] * (v1 - v0)],
+                    shade: face.shade,
+                });
+            }
+        }
+    }
+    vertices
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atlas::tile;
     use melon_world::block;
     use melon_world::{FlatGenerator, World, CHUNK_W};
 
@@ -284,6 +374,36 @@ mod tests {
         assert!(
             elapsed < std::time::Duration::from_millis(1000),
             "meshing 16 sections took {elapsed:?} — over budget"
+        );
+    }
+
+    #[test]
+    fn player_model_is_six_boxes_with_face_front() {
+        let verts = player_model_mesh(tile::SHIRT, [0.0, 6.0, 0.0], 0.0);
+        // legs 2 + torso 1 + arms 2 + head 1 = 6 boxes × 36 vertices.
+        assert_eq!(verts.len(), 216);
+        // Feet at the bottom, head top at 2.0 (legs 0.75 + torso 0.75 + head 0.5).
+        let min_y = verts.iter().map(|v| v.position[1]).fold(f32::MAX, f32::min);
+        let max_y = verts.iter().map(|v| v.position[1]).fold(f32::MIN, f32::max);
+        assert!((min_y - 6.0).abs() < 1e-4);
+        assert!((max_y - (6.0 + 2.0)).abs() < 1e-4);
+        // At yaw 0 the width spans Z (arms flank to ±0.5) and the depth
+        // spans X (±0.25). Yaw π/2 swaps them.
+        let max_z = verts.iter().map(|v| v.position[2]).fold(f32::MIN, f32::max);
+        assert!((max_z - 0.5).abs() < 1e-4, "arms flank the torso along z");
+        let max_x = verts.iter().map(|v| v.position[0]).fold(f32::MIN, f32::max);
+        assert!(
+            (max_x - 0.25).abs() < 1e-4,
+            "depth is 0.25 along the facing"
+        );
+        let rotated = player_model_mesh(tile::SHIRT, [0.0, 6.0, 0.0], std::f32::consts::FRAC_PI_2);
+        let rot_max_x = rotated
+            .iter()
+            .map(|v| v.position[0])
+            .fold(f32::MIN, f32::max);
+        assert!(
+            (rot_max_x - 0.5).abs() < 1e-4,
+            "yaw must swing the arm span into x, got {rot_max_x}"
         );
     }
 }

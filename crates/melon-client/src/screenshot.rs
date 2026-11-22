@@ -7,7 +7,7 @@ use melon_world::FlatGenerator;
 use wgpu::util::DeviceExt;
 
 use crate::atlas;
-use crate::camera::{Camera, SPAWN, SPAWN_PITCH, SPAWN_YAW};
+use crate::camera::Camera;
 use crate::mesh::{self, VERTEX_STRIDE};
 
 const WIDTH: u32 = 1280;
@@ -69,7 +69,20 @@ pub fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     struct Uniforms {
         view_proj: [[f32; 4]; 4],
     }
-    let camera = Camera::new(Vec3::from(SPAWN), SPAWN_YAW, SPAWN_PITCH);
+    // Third-person view of a Minecraft-style body at the spawn.
+    let body_feet = [12.0f32, 6.0, 12.0];
+    let body_yaw = 0.0f32;
+    let (bfx, bfz) = (body_yaw.cos(), body_yaw.sin());
+    // Camera in FRONT of the body looking back at the face.
+    let camera = Camera::new(
+        Vec3::new(
+            body_feet[0] + bfx * 3.5,
+            body_feet[1] + 2.2,
+            body_feet[2] + bfz * 3.5,
+        ),
+        body_yaw + std::f32::consts::PI,
+        -0.15,
+    );
     let uniforms = Uniforms {
         view_proj: camera
             .view_proj(WIDTH as f32 / HEIGHT as f32)
@@ -198,9 +211,9 @@ pub fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
         cache: None,
     });
 
-    // --- world meshes ---
+    // --- world meshes + a player body to verify the model ---
     let world = FlatGenerator::superflat().generate(4, 4);
-    let sections: Vec<(wgpu::Buffer, u32)> = mesh::mesh_world(&world)
+    let mut draws: Vec<(wgpu::Buffer, u32)> = mesh::mesh_world(&world)
         .into_iter()
         .map(|(_, vertices)| {
             let count = vertices.len() as u32;
@@ -212,6 +225,26 @@ pub fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
             (buffer, count)
         })
         .collect();
+    let player_verts = mesh::player_model_mesh(atlas::tile::SHIRT, body_feet, body_yaw);
+    {
+        let mut groups: std::collections::BTreeMap<(i32, i32), usize> = Default::default();
+        for v in &player_verts {
+            let tx = (v.uv[0] * 16.0) as i32;
+            let ty = (v.uv[1] * 16.0) as i32;
+            *groups.entry((tx, ty)).or_insert(0) += 1;
+        }
+        println!("player mesh tile groups: {groups:?}");
+        for v in player_verts.iter().take(6) {
+            println!("  pos {:?} uv {:?}", v.position, v.uv);
+        }
+    }
+    let player_count = player_verts.len() as u32;
+    let player_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("melon-player"),
+        contents: bytemuck::cast_slice(&player_verts),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    draws.push((player_buffer, player_count));
 
     // --- offscreen target + depth ---
     let size = wgpu::Extent3d {
@@ -273,7 +306,7 @@ pub fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        for (buffer, count) in &sections {
+        for (buffer, count) in &draws {
             pass.set_vertex_buffer(0, buffer.slice(..));
             pass.draw(0..*count, 0..1);
         }
@@ -321,6 +354,16 @@ pub fn run(path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let start = (y * bytes_per_row) as usize;
         rgba.extend_from_slice(&data[start..start + (WIDTH * 4) as usize]);
     }
+
+    // Debug: also write a raw PPM (RGB) for pixel sampling.
+    let mut ppm = format!("P6\n{WIDTH} {HEIGHT}\n255\n").into_bytes();
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let i = ((y * WIDTH + x) * 4) as usize;
+            ppm.extend_from_slice(&[rgba[i], rgba[i + 1], rgba[i + 2]]);
+        }
+    }
+    let _ = std::fs::write("/tmp/melon-frame.ppm", &ppm);
 
     write_png(path, WIDTH, HEIGHT, &rgba)?;
     println!("screenshot written: {path} ({WIDTH}x{HEIGHT})");

@@ -1,14 +1,12 @@
-//! Fly camera — position + yaw/pitch with world-space movement.
+//! Camera — eye position + yaw/pitch (movement is handled by the
+//! `melon-world` collision module against the player simulation).
 
 use glam::{Mat4, Vec3};
 
-const SPEED: f32 = 10.0; // blocks per second
 const LOOK_SENSITIVITY: f32 = 0.0032;
 /// Just under 90° so the forward vector never degenerates.
 const PITCH_LIMIT: f32 = 1.55;
 
-/// Spawn high above the superflat, looking down across the world.
-pub const SPAWN: (f32, f32, f32) = (8.0, 14.0, 28.0);
 pub const SPAWN_YAW: f32 = -std::f32::consts::FRAC_PI_2;
 pub const SPAWN_PITCH: f32 = -0.45;
 
@@ -19,17 +17,6 @@ pub struct Camera {
     pub yaw: f32,
     /// Look up/down; clamped so forward never degenerates.
     pub pitch: f32,
-}
-
-/// Per-frame movement intent (from the keyboard, in `[−1, 1]` ranges).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MoveInput {
-    /// W/S — forward/back.
-    pub forward: f32,
-    /// D/A — right/left.
-    pub strafe: f32,
-    /// Space/Shift — up/down.
-    pub vertical: f32,
 }
 
 impl Camera {
@@ -50,26 +37,9 @@ impl Camera {
         )
     }
 
-    /// Horizontal forward (movement plane).
-    fn forward_h(&self) -> Vec3 {
-        Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin())
-    }
-
     pub fn look(&mut self, dx: f32, dy: f32) {
         self.yaw += dx * LOOK_SENSITIVITY;
         self.pitch = (self.pitch - dy * LOOK_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
-    }
-
-    pub fn apply_move(&mut self, dt: f32, input: MoveInput) {
-        let f = self.forward_h();
-        // Screen-right = forward × up (matches look_at's right vector).
-        let right = Vec3::new(-f.z, 0.0, f.x);
-        let mut delta = f * input.forward + right * input.strafe;
-        if delta.length_squared() > 1.0 {
-            delta = delta.normalize();
-        }
-        delta.y = input.vertical;
-        self.position += delta * SPEED * dt;
     }
 
     /// View-projection for the given viewport aspect.
@@ -104,39 +74,6 @@ mod tests {
         assert!((c.pitch - PITCH_LIMIT).abs() < 1e-4, "pitch must clamp");
         c.look(0.0, 1_000_000.0);
         assert!((c.pitch + PITCH_LIMIT).abs() < 1e-4);
-    }
-
-    #[test]
-    fn forward_move_moves_along_heading() {
-        let mut c = Camera::new(Vec3::ZERO, 0.0, 0.0);
-        c.apply_move(
-            1.0,
-            MoveInput {
-                forward: 1.0,
-                ..Default::default()
-            },
-        );
-        assert!((c.position.x - SPEED).abs() < 1e-4);
-        assert_eq!(c.position.y, 0.0);
-        assert_eq!(c.position.z, 0.0);
-    }
-
-    #[test]
-    fn diagonal_move_is_normalized() {
-        let mut c = Camera::new(Vec3::ZERO, 0.0, 0.0);
-        c.apply_move(
-            1.0,
-            MoveInput {
-                forward: 1.0,
-                strafe: 1.0,
-                ..Default::default()
-            },
-        );
-        let dist = c.position.length();
-        assert!(
-            (dist - SPEED).abs() < 1e-3,
-            "W+D must not move faster than W"
-        );
     }
 
     #[test]

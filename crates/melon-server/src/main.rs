@@ -1,14 +1,15 @@
-//! MELON server binary (Phase 1: session spine).
+//! MELON server binary (Phase 3: world streaming + block edits).
 
 use std::net::SocketAddr;
 
-use melon_server::{bind, serve, ServerConfig};
+use melon_server::{bind, serve, ServerConfig, WorldHandle};
 
 #[derive(Debug)]
 struct Args {
     bind_addr: SocketAddr,
     server_name: String,
     motd: String,
+    world_size: u32,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -16,6 +17,7 @@ fn parse_args() -> Result<Args, String> {
         bind_addr: "127.0.0.1:25777".parse().expect("default addr is valid"),
         server_name: "MELON".to_string(),
         motd: "More players. More matches. Less infrastructure.".to_string(),
+        world_size: 4,
     };
 
     let mut it = std::env::args().skip(1);
@@ -30,6 +32,16 @@ fn parse_args() -> Result<Args, String> {
             }
             "--name" => args.server_name = it.next().ok_or("--name needs a value")?,
             "--motd" => args.motd = it.next().ok_or("--motd needs a value")?,
+            "--world-size" => {
+                args.world_size = it
+                    .next()
+                    .ok_or("--world-size needs a value")?
+                    .parse()
+                    .map_err(|e| format!("bad --world-size: {e}"))?;
+                if !(1..=32).contains(&args.world_size) {
+                    return Err("--world-size must be 1..=32".to_string());
+                }
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -42,12 +54,13 @@ fn parse_args() -> Result<Args, String> {
 
 fn print_help() {
     println!(
-        "melon-server — MELON lightweight game server (Phase 1)\n\n\
+        "melon-server — MELON lightweight game server (Phase 3)\n\n\
          Usage: melon-server [flags]\n\n\
          Flags:\n  \
-         --addr <ip:port>   bind address (default 127.0.0.1:25777)\n  \
-         --name <string>    server name (default MELON)\n  \
-         --motd <string>    message of the day\n  \
+         --addr <ip:port>       bind address (default 127.0.0.1:25777)\n  \
+         --name <string>        server name (default MELON)\n  \
+         --motd <string>        message of the day\n  \
+         --world-size <1..32>   world side length in chunks (default 4)\n  \
          -h, --help"
     );
 }
@@ -72,7 +85,9 @@ fn main() {
         bind_addr: args.bind_addr,
         server_name: args.server_name,
         motd: args.motd,
+        world_chunks: args.world_size,
     };
+    let world = WorldHandle::new(cfg.world_chunks);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -81,7 +96,7 @@ fn main() {
 
     if let Err(err) = runtime.block_on(async move {
         let (listener, _addr) = bind(&cfg).await?;
-        serve(listener, cfg).await
+        serve(listener, cfg, world).await
     }) {
         eprintln!("fatal: {err}");
         std::process::exit(1);

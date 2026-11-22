@@ -185,21 +185,20 @@ melon/
 
 ## Getting Started
 
-The platform is in active development — Phase 1 (protocol spine) is live, and the playable client is taking shape.
+One command does everything — including installing Rust if it's missing:
 
 ```bash
 git clone https://github.com/WTFBuilds/Minecraft-Rust-Cracked.git
 cd Minecraft-Rust-Cracked
-
-# build & test the workspace (requires Rust 1.85+)
-cargo test --workspace
-
-# run the server and connect a headless client
-cargo run -p melon-server
-cargo run -p melon-client -- --headless --name YourName
+./setup.sh              # build + demo: server starts, a headless client pings it
+./setup.sh client       # open the game window (Phase 2 world)
+./setup.sh play         # server in background + game window together
+./setup.sh test         # fmt + clippy + all tests
 ```
 
-**Prerequisites (for contributors):** a stable [Rust](https://rustup.rs) toolchain and Git. The Phase 2 game window builds on `wgpu`; see [plan.md](plan.md) for what's next.
+All launcher commands: `./setup.sh -h` (env overrides: `MELON_PORT`, `MELON_PLAYER`, …).
+
+The platform is in active development — Phase 2 (client renders a world) just shipped; see [plan.md](plan.md) for what's next. Contributors need a stable [Rust](https://rustup.rs) toolchain (the setup script installs it) and Git.
 
 ## Contributing
 

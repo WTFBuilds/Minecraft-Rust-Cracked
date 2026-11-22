@@ -16,7 +16,7 @@ pub mod varint;
 pub use error::ProtoError;
 pub use frame::{ClientSessionCodec, ServerSessionCodec};
 pub use message::{
-    validate_username, ClientMessage, Handshake, HandshakeRejectReason, ServerMessage,
-    PROTOCOL_VERSION,
+    validate_chat, validate_username, ChunkData, ClientMessage, Handshake, HandshakeRejectReason,
+    PlayerEntry, PlayerMove, ServerMessage, WorldInfo, PROTOCOL_VERSION,
 };
 pub use varint::{read_varint, varint_bytes, VarIntError};

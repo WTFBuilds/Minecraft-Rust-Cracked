@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use thiserror::Error;
+
 pub const CHUNK_W: usize = 16;
 pub const CHUNK_H: usize = 256;
 pub const SECTION_SIZE: usize = 16;
@@ -156,6 +158,89 @@ impl World {
     pub fn chunk(&self, cx: i32, cz: i32) -> Option<&Chunk> {
         self.chunks.get(&(cx, cz))
     }
+
+    /// Chunks within a rectangular region (chunk coords, inclusive bounds) —
+    /// the server uses this to stream its world.
+    pub fn chunks_in(
+        &self,
+        min_cx: i32,
+        max_cx: i32,
+        min_cz: i32,
+        max_cz: i32,
+    ) -> Vec<(ChunkPos, &Chunk)> {
+        self.chunks
+            .iter()
+            .filter(|((cx, cz), _)| {
+                *cx >= min_cx && *cx <= max_cx && *cz >= min_cz && *cz <= max_cz
+            })
+            .map(|(pos, chunk)| (*pos, chunk))
+            .collect()
+    }
+}
+
+/// Wire-format errors for chunk section encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum WireError {
+    #[error("chunk payload shorter than the section mask promises")]
+    Truncated,
+    #[error("chunk payload has trailing bytes after the last section")]
+    TrailingBytes,
+}
+
+impl Chunk {
+    /// Replace one section (used by wire decoding).
+    pub fn set_section(&mut self, index: usize, section: Section) {
+        self.sections[index] = section;
+    }
+
+    /// Serialize non-empty sections for the wire:
+    /// `(section_mask, concatenated LE u16 block arrays)`. All-air sections
+    /// are skipped entirely — a superflat chunk travels as ~8 KB, not 128 KB.
+    pub fn encode_sections(&self) -> (u16, Vec<u8>) {
+        let mut mask = 0u16;
+        let mut data = Vec::new();
+        for (i, section) in self.sections.iter().enumerate() {
+            if section.is_empty() {
+                continue;
+            }
+            mask |= 1 << i;
+            for y in 0..SECTION_SIZE {
+                for z in 0..SECTION_SIZE {
+                    for x in 0..SECTION_SIZE {
+                        data.extend_from_slice(&section.get(x, y, z).to_le_bytes());
+                    }
+                }
+            }
+        }
+        (mask, data)
+    }
+
+    /// Decode a chunk from [`Chunk::encode_sections`] output.
+    pub fn decode_sections(mask: u16, data: &[u8]) -> Result<Chunk, WireError> {
+        let mut chunk = Chunk::empty();
+        let mut offset = 0usize;
+        for sy in 0..SECTIONS_PER_CHUNK {
+            if mask & (1 << sy) == 0 {
+                continue;
+            }
+            let end = offset + SECTION_VOLUME * 2;
+            let slice = data.get(offset..end).ok_or(WireError::Truncated)?;
+            let mut section = Section::empty();
+            for i in 0..SECTION_VOLUME {
+                let id = u16::from_le_bytes([slice[i * 2], slice[i * 2 + 1]]);
+                if id != 0 {
+                    // local_index layout: (y << 8) | (z << 4) | x
+                    section.set(i & 15, i >> 8, (i >> 4) & 15, id);
+                }
+            }
+            chunk.set_section(sy, section);
+            offset = end;
+        }
+        if offset != data.len() {
+            return Err(WireError::TrailingBytes);
+        }
+        Ok(chunk)
+    }
 }
 
 #[cfg(test)]
@@ -209,5 +294,55 @@ mod tests {
         assert_eq!(w.get_block(0, -1, 0), None);
         assert_eq!(w.get_block(0, 256, 0), None);
         assert_eq!(w.chunk_count(), 0);
+    }
+
+    #[test]
+    fn chunk_sections_roundtrip_through_wire() {
+        use crate::FlatGenerator;
+        let world = FlatGenerator::superflat().generate(2, 1);
+        let chunk = world.chunk(0, 0).expect("chunk exists").clone();
+
+        let (mask, data) = chunk.encode_sections();
+        assert_eq!(
+            mask, 0b0000_0000_0000_0001,
+            "only the y=0 section is non-empty"
+        );
+        assert_eq!(data.len(), SECTION_VOLUME * 2, "one section = 8 KB");
+
+        let decoded = Chunk::decode_sections(mask, &data).expect("decode");
+        for y in 0..8u32 {
+            for x in 0..4u32 {
+                for z in 0..4u32 {
+                    assert_eq!(
+                        decoded.get(x as usize, y as usize, z as usize),
+                        chunk.get(x as usize, y as usize, z as usize),
+                        "block mismatch at {x},{y},{z}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn decode_rejects_truncated_and_trailing_payloads() {
+        use crate::block;
+        let mut chunk = Chunk::empty();
+        chunk.set(0, 0, 0, block::STONE);
+        let (mask, data) = chunk.encode_sections();
+
+        assert!(matches!(
+            Chunk::decode_sections(mask, &data[..data.len() - 2]),
+            Err(WireError::Truncated)
+        ));
+        let mut extra = data.clone();
+        extra.extend_from_slice(&[0, 0]);
+        assert!(matches!(
+            Chunk::decode_sections(mask, &extra),
+            Err(WireError::TrailingBytes)
+        ));
+        assert!(
+            Chunk::decode_sections(0, &[]).is_ok(),
+            "mask 0 = empty chunk"
+        );
     }
 }

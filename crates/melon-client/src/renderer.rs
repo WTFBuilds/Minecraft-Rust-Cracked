@@ -6,12 +6,11 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
-use melon_world::FlatGenerator;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use crate::atlas;
-use crate::mesh::{self, VERTEX_STRIDE};
+use crate::mesh::{Vertex, VERTEX_STRIDE};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -36,6 +35,15 @@ pub struct Gpu {
     uniform_buf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     sections: HashMap<(i32, i32, i32), SectionBuf>,
+    players: HashMap<u64, SectionBuf>,
+    egui_renderer: egui_wgpu::Renderer,
+}
+
+/// One egui frame handed from the GUI layer to the renderer.
+pub struct UiFrame {
+    pub paint_jobs: Vec<egui::epaint::ClippedPrimitive>,
+    pub textures_delta: egui::TexturesDelta,
+    pub pixels_per_point: f32,
 }
 
 impl Gpu {
@@ -254,27 +262,18 @@ impl Gpu {
             cache: None,
         });
 
-        // --- world ---
-        let mut gpu_sections = HashMap::new();
-        let world = FlatGenerator::superflat().generate(4, 4);
-        for (key, vertices) in mesh::mesh_world(&world) {
-            let vertex_count = vertices.len() as u32;
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("melon-section"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            gpu_sections.insert(
-                key,
-                SectionBuf {
-                    buffer,
-                    vertex_count,
-                },
-            );
-        }
-        let section_count = gpu_sections.len();
-        let vertex_total: u32 = gpu_sections.values().map(|s| s.vertex_count).sum();
-        println!("world meshed: {section_count} sections, {vertex_total} vertices");
+        // Sections start empty — the network session fills them as world
+        // chunks stream in (Phase 3). Screenshots mesh locally instead.
+        let gpu_sections = HashMap::new();
+        let players = HashMap::new();
+
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &device,
+            config.format,
+            Some(wgpu::TextureFormat::Depth24Plus),
+            1, // msaa samples
+            false,
+        );
 
         Ok(Self {
             window,
@@ -287,7 +286,57 @@ impl Gpu {
             uniform_buf,
             bind_group,
             sections: gpu_sections,
+            players,
+            egui_renderer,
         })
+    }
+
+    /// Replace (or add) one section's mesh from fresh vertices.
+    pub fn update_section(&mut self, key: (i32, i32, i32), vertices: Vec<Vertex>) {
+        if vertices.is_empty() {
+            self.sections.remove(&key);
+            return;
+        }
+        let vertex_count = vertices.len() as u32;
+        let buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("melon-section"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        self.sections.insert(
+            key,
+            SectionBuf {
+                buffer,
+                vertex_count,
+            },
+        );
+    }
+
+    /// Add or move a remote player's body model (rebuilt per update —
+    /// ~216 vertices, trivial).
+    pub fn update_player(&mut self, id: u64, vertices: Vec<Vertex>) {
+        let vertex_count = vertices.len() as u32;
+        let buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("melon-player"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        self.players.insert(
+            id,
+            SectionBuf {
+                buffer,
+                vertex_count,
+            },
+        );
+    }
+
+    /// Drop a remote player's mesh (they left).
+    pub fn remove_player(&mut self, id: u64) {
+        self.players.remove(&id);
     }
 
     fn create_depth_view(
@@ -321,8 +370,8 @@ impl Gpu {
         }
     }
 
-    /// Render one frame with the given camera transform.
-    pub fn render(&mut self, view_proj: Mat4) {
+    /// Render one frame with the given camera transform + egui overlay.
+    pub fn render(&mut self, view_proj: Mat4, ui_frame: UiFrame) {
         let uniforms = Uniforms {
             view_proj: view_proj.to_cols_array_2d(),
         };
@@ -346,8 +395,25 @@ impl Gpu {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("melon-frame"),
             });
+
+        // egui texture updates must happen before the pass.
+        for (id, delta) in ui_frame.textures_delta.set {
+            self.egui_renderer
+                .update_texture(&self.device, &self.queue, id, &delta);
+        }
+        let screen = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.config.width, self.config.height],
+            pixels_per_point: ui_frame.pixels_per_point,
+        };
+        let user_cmds = self.egui_renderer.update_buffers(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &ui_frame.paint_jobs,
+            &screen,
+        );
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("melon-world-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -372,15 +438,29 @@ impl Gpu {
                 }),
                 ..Default::default()
             });
+            let mut pass = pass.forget_lifetime();
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
             for section in self.sections.values() {
                 pass.set_vertex_buffer(0, section.buffer.slice(..));
                 pass.draw(0..section.vertex_count, 0..1);
             }
+            for player in self.players.values() {
+                pass.set_vertex_buffer(0, player.buffer.slice(..));
+                pass.draw(0..player.vertex_count, 0..1);
+            }
+            self.egui_renderer
+                .render(&mut pass, &ui_frame.paint_jobs, &screen);
         }
 
-        self.queue.submit([encoder.finish()]);
+        let main = encoder.finish();
+        let mut submissions = vec![main];
+        submissions.extend(user_cmds);
+        self.queue.submit(submissions);
         frame.present();
+
+        for id in ui_frame.textures_delta.free {
+            self.egui_renderer.free_texture(&id);
+        }
     }
 }

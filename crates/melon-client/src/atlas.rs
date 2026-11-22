@@ -31,6 +31,12 @@ pub mod tile {
     pub const DIAMOND: u8 = 11;
     pub const BED_HEAD: u8 = 12;
     pub const BED_FOOT: u8 = 13;
+    // Player skin set (row 1) — used by the Minecraft-style body model.
+    pub const SKIN: u8 = 16;
+    pub const FACE: u8 = 17;
+    pub const HAIR: u8 = 18;
+    pub const SHIRT: u8 = 19;
+    pub const PANTS: u8 = 20;
 }
 
 /// Deterministic 8-bit hash noise for pixel (x, y) with a per-tile seed.
@@ -115,12 +121,43 @@ pub fn generate() -> Vec<u8> {
         0x4E19,
         Some((3, [214, 214, 214])),
     );
+    // Player skin set.
+    fill_tile(&mut px, SKIN, [232, 190, 160], 10, 0x51D1, None);
+    // Face: skin with a hair fringe; eyes drawn in afterwards.
+    fill_tile(
+        &mut px,
+        FACE,
+        [232, 190, 160],
+        8,
+        0x51D2,
+        Some((5, [74, 52, 36])),
+    );
+    fill_tile(&mut px, HAIR, [74, 52, 36], 14, 0x51D3, None);
+    fill_tile(&mut px, SHIRT, [0, 124, 124], 12, 0x51D4, None);
+    fill_tile(&mut px, PANTS, [70, 86, 180], 12, 0x51D5, None);
+
+    // Eyes on the face tile: two 2×2 dark pixels with white glints.
+    let fx = (FACE as usize % ATLAS_TILES) * TILE_PX;
+    let fy = (FACE as usize / ATLAS_TILES) * TILE_PX;
+    for (ex, ey, c) in [
+        (4, 8, [30, 30, 40]),
+        (5, 8, [30, 30, 40]),
+        (10, 8, [30, 30, 40]),
+        (11, 8, [30, 30, 40]),
+        (5, 9, [240, 240, 240]),
+        (11, 9, [240, 240, 240]),
+    ] {
+        let idx = ((fy + ey) * ATLAS_PX + fx + ex) * 4;
+        px[idx..idx + 4].copy_from_slice(&[c[0], c[1], c[2], 0xFF]);
+    }
 
     // Unused tile slots get the classic magenta/black "missing texture"
-    // checker — visible in-world instead of silently invisible.
+    // checker — visible in-world instead of silently invisible. Known
+    // tiles: row 0 = terrain (first 14), row 1 = player skin set (first 6).
     for py in 0..ATLAS_PX {
         for pxx in 0..ATLAS_PX {
-            let in_known_tile = py < TILE_PX && pxx < TILE_PX * 14;
+            let in_known_tile = (py < TILE_PX && pxx < TILE_PX * 14)
+                || ((TILE_PX..TILE_PX * 2).contains(&py) && pxx < TILE_PX * 5);
             if in_known_tile {
                 continue;
             }
@@ -185,8 +222,8 @@ mod tests {
     fn atlas_is_fully_opaque() {
         let px = generate();
         assert_eq!(px.len(), ATLAS_PX * ATLAS_PX * 4);
-        for a in px.iter().skip(3).step_by(4) {
-            assert_eq!(*a, 0xFF, "every atlas pixel must be opaque");
+        for (i, a) in px.iter().skip(3).step_by(4).enumerate() {
+            assert_eq!(*a, 0xFF, "pixel {i} must be opaque");
         }
     }
 
