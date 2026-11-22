@@ -1,0 +1,11 @@
+# Rust
+/target
+
+# macOS
+.DS_Store
+
+# tooling
+.video_agent/
+
+# node (website)
+node_modules/

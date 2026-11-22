@@ -1,0 +1,8 @@
+[package]
+name = "melon-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MELON tooling: arena converter, benchmark bots, admin CLI"
+
+[dependencies]

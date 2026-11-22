@@ -1,0 +1,17 @@
+[package]
+name = "melon-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MELON lightweight game server"
+
+[dependencies]
+melon-proto = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]

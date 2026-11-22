@@ -6,11 +6,11 @@
 
 ### Minecraft Arcade Infrastructure, Reimagined.
 
-**A high-performance Minecraft Java Edition 1.8.9 arcade server engine, written in Rust.**
+**A lightweight Minecraft-style arcade platform — playable client and game server, written in Rust.**
 
 <img src="https://img.shields.io/badge/Language-Rust-orange?style=for-the-badge&logo=rust" alt="Rust" />
-<img src="https://img.shields.io/badge/Minecraft-1.8.9-green?style=for-the-badge" alt="Minecraft 1.8.9" />
-<img src="https://img.shields.io/badge/Protocol-47-blue?style=for-the-badge" alt="Protocol 47" />
+<img src="https://img.shields.io/badge/Platform-Client_+_Server-green?style=for-the-badge" alt="Client + Server" />
+<img src="https://img.shields.io/badge/Protocol-MELON_v1-blue?style=for-the-badge" alt="MELON Protocol v1" />
 <img src="https://img.shields.io/badge/Status-In_Development-yellow?style=for-the-badge" alt="In Development" />
 <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="MIT License" />
 <img src="https://img.shields.io/badge/Organization-WTFBUILDS-black?style=for-the-badge" alt="WTFBUILDS" />
@@ -25,7 +25,7 @@
 
 Running a competitive Minecraft arcade network shouldn't require enormous infrastructure budgets — yet that is exactly what traditional server architectures demand.
 
-**MELON** is being built as a purpose-built arcade engine rather than another general-purpose Minecraft server implementation. It is designed from the ground up to run large numbers of isolated, concurrent minigame matches on minimal hardware — starting with 1.8.9 BedWars, the most latency-sensitive and infrastructure-hungry mode in competitive Minecraft.
+**MELON** is being built as a purpose-built arcade platform rather than another general-purpose Minecraft server implementation. Its own lightweight client and server speak a clean, versioned binary protocol — no legacy baggage — and the runtime is designed from the ground up to host large numbers of isolated, concurrent minigame matches on minimal hardware, starting with BedWars.
 
 > ### 🎯 Mission
 > **More players. More matches. Less infrastructure.**
@@ -53,9 +53,9 @@ Running a competitive Minecraft arcade network shouldn't require enormous infras
 
 ```mermaid
 flowchart TB
-    A["Minecraft Java 1.8.9 Clients"]
+    A["MELON Clients"]
     B["MELON Network Layer"]
-    C["Protocol 47 Handler"]
+    C["Protocol Codec"]
     D["Game Runtime"]
     E["Match Manager"]
     F["BedWars Engine"]
@@ -78,8 +78,8 @@ flowchart TB
 
 | Component | Responsibility |
 | :--- | :--- |
-| **Protocol** | Minecraft 1.8.9 (Protocol 47) compatibility layer |
-| **Networking** | TCP connection handling and packet codec pipeline |
+| **Protocol** | MELON wire protocol — versioned handshake, framed messages |
+| **Networking** | TLS-capable TCP transport and codec pipeline |
 | **Runtime** | Deterministic game loops and tick scheduling |
 | **World** | Blocks, chunks, and world state management |
 | **Entities** | Player and entity simulation |
@@ -102,9 +102,10 @@ BedWars is the first and primary optimization target. It stresses every part of 
 | Layer | Technology |
 | :--- | :--- |
 | Core language | Rust |
-| Protocol target | Minecraft Protocol 47 (Java Edition 1.8.9) |
-| Transport | TCP |
-| Architecture | Modular, multi-crate engine |
+| Wire protocol | MELON protocol v1 — compact binary, versioned |
+| Transport | TLS-capable TCP |
+| Client renderer | wgpu |
+| Architecture | Shared workspace: `melon-proto` + `melon-world` power both sides |
 | Concurrency | Async I/O with dedicated tick schedulers |
 
 ## Performance Engineering
@@ -131,60 +132,74 @@ We don't optimize based on assumptions — we optimize based on measurement. MEL
 
 ## Roadmap
 
-**Phase 1 — Foundation**
-- [ ] Project foundation and core architecture
-- [ ] Minecraft 1.8.9 protocol implementation
-- [ ] Client handshake and login
+**Phase 1 — Foundation** · *✅ complete*
+- [x] Cargo workspace: 5 crates, CI, quality gates
+- [x] MELON wire protocol v1 (handshake, auth, framing)
+- [x] Client/server session spine with live ping/pong
 
-**Phase 2 — Engine Core**
-- [ ] Player movement and synchronization
-- [ ] World and chunk management
-- [ ] Multi-match runtime
+**Phase 2 — Client Core** · *🚧 in progress*
+- [ ] wgpu renderer: chunk meshing, texture atlas
+- [ ] Fly camera and movement
+- [ ] Render-benchmark gate
 
-**Phase 3 — Game Layer**
-- [ ] BedWars engine
-- [ ] Combat, inventory, and item systems
-- [ ] Matchmaking and lobby flow
+**Phase 3 — Connected World**
+- [ ] Server-hosted worlds with chunk streaming
+- [ ] Block place/break sync
+- [ ] Presence and chat
 
-**Phase 4 — Scale & Launch**
+**Phase 4 — Game Layer**
+- [ ] Combat and 1.8-style knockback
+- [ ] Arena format and vanilla map import
+- [ ] BedWars vertical slice
+
+**Phase 5 — Scale & Launch**
+- [ ] Vanilla 1.8.9 bridge gateway
 - [ ] Performance benchmarking suite
-- [ ] Production deployment
 - [ ] SkyWars and Duels support
 - [ ] Arcade orchestration infrastructure
+
+*Progress is tracked checkbox-by-checkbox in [plan.md](plan.md).*
 
 ## Project Structure
 
 ```text
 melon/
 ├── crates/
-│   ├── protocol/      # Minecraft protocol 47 codec
-│   ├── networking/    # TCP transport & packet pipeline
-│   ├── runtime/       # Game loops & tick scheduling
-│   ├── world/         # Blocks, chunks & world state
-│   ├── entities/      # Player & entity simulation
-│   ├── combat/        # PvP, hit detection & knockback
-│   ├── matchmaking/   # Match allocation & lifecycle
-│   └── game-modes/    # BedWars, SkyWars, Duels
-├── assets/            # Project branding & artwork
-├── benchmarks/        # Reproducible performance harnesses
-├── docs/              # Design documents & specifications
-├── tests/             # Integration & protocol tests
-├── Cargo.toml
-└── README.md
+│   ├── melon-proto/    # Wire protocol: framing, codec, message types
+│   ├── melon-world/    # Shared world model: blocks, chunks, arenas
+│   ├── melon-server/   # Lightweight game server (match actors, 20 TPS)
+│   ├── melon-client/   # Playable client (wgpu) + headless bot mode
+│   └── melon-tools/    # Arena converter, benchmark bots, admin CLI
+├── docs/               # Engine plan & reference analyses
+├── website/            # Landing site (Next.js)
+├── assets/             # Project branding & artwork
+├── reference/          # Reference artifacts (see docs for policy)
+├── plan.md             # Execution tracker
+└── Cargo.toml          # Rust workspace
 ```
 
-*Planned structure — subject to change during development.*
+## Documentation
+
+- [Engine Plan — Rebuilding Minecraft 1.8.9 in Rust](docs/engine-plan.md) — strategy, architecture, and the milestone ladder
+- [Reference Analysis — Vanilla 1.8.9 Server Jar](docs/reference/minecraft-server-1.8.9.md) — static analysis of `server.jar` and our clean-room policy
 
 ## Getting Started
 
-The engine is in active development — the first public build will ship alongside the initial protocol implementation.
+The platform is in active development — Phase 1 (protocol spine) is live, and the playable client is taking shape.
 
 ```bash
 git clone https://github.com/WTFBuilds/Minecraft-Rust-Cracked.git
 cd Minecraft-Rust-Cracked
+
+# build & test the workspace (requires Rust 1.85+)
+cargo test --workspace
+
+# run the server and connect a headless client
+cargo run -p melon-server
+cargo run -p melon-client -- --headless --name YourName
 ```
 
-**Prerequisites (for contributors):** a stable [Rust](https://rustup.rs) toolchain and Git. Build and run instructions will be documented here as crates land.
+**Prerequisites (for contributors):** a stable [Rust](https://rustup.rs) toolchain and Git. The Phase 2 game window builds on `wgpu`; see [plan.md](plan.md) for what's next.
 
 ## Contributing
 

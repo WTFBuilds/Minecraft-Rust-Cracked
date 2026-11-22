@@ -1,0 +1,13 @@
+[package]
+name = "melon-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MELON platform wire protocol: framing, codec, and message types"
+
+[dependencies]
+serde = { workspace = true }
+bincode = { workspace = true }
+tokio-util = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }

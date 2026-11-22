@@ -1,0 +1,22 @@
+[package]
+name = "melon-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MELON lightweight game client"
+
+[dependencies]
+melon-proto = { workspace = true }
+melon-world = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+glam = { workspace = true }
+bytemuck = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }
+
+[[bin]]
+name = "melon-client"
+path = "src/main.rs"
